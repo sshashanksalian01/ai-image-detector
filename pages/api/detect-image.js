@@ -1,38 +1,21 @@
 /**
  * /pages/api/detect-image.js
- *
- * Backend API route that:
- * 1. Receives a multipart form upload
- * 2. Validates the file (type + size)
- * 3. Sends the binary image to Hugging Face Inference API
- * 4. Parses and normalises the model response
- * 5. Returns { prediction, confidence, details } JSON
- *
- * Model used: Ateeqq/ai-vs-human-image-detector
- * (A fine-tuned SigLIP classifier: labels are "ai" / "human")
+ * Model: umm-maybe/AI-image-detector
  */
 
 import formidable from 'formidable';
 import fs from 'fs';
-import path from 'path';
 
-// ── Tell Next.js we handle the body ourselves ──────────────────────────────
 export const config = { api: { bodyParser: false } };
 
-// ── Constants ──────────────────────────────────────────────────────────────
-const HF_API_URL =
-  'https://api-inference.huggingface.co/models/umm-maybe/AI-image-detector';
-const MAX_BYTES    = 10 * 1024 * 1024;          // 10 MB
+const HF_API_URL = 'https://api-inference.huggingface.co/models/umm-maybe/AI-image-detector';
+const MAX_BYTES  = 10 * 1024 * 1024;
 const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp'];
-const TIMEOUT_MS   = 30_000;                    // 30 s
+const TIMEOUT_MS = 30_000;
 
-// ── Helper: parse multipart form ──────────────────────────────────────────
 function parseForm(req) {
   return new Promise((resolve, reject) => {
-    const form = formidable({
-      maxFileSize: MAX_BYTES,
-      keepExtensions: true,
-    });
+    const form = formidable({ maxFileSize: MAX_BYTES, keepExtensions: true });
     form.parse(req, (err, _fields, files) => {
       if (err) return reject(err);
       resolve(files);
@@ -40,7 +23,6 @@ function parseForm(req) {
   });
 }
 
-// ── Helper: abort-able fetch with timeout ─────────────────────────────────
 async function fetchWithTimeout(url, options, ms) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
@@ -51,67 +33,62 @@ async function fetchWithTimeout(url, options, ms) {
   }
 }
 
-// ── Helper: normalise HF label → friendly string ─────────────────────────
 function normaliseLabel(raw) {
   const s = (raw || '').toLowerCase();
-  if (s.includes('artificial') || s.includes('fake') || s.includes('ai') || s.includes('generated') || s.includes('sdxl') || s.includes('stable')) {
+  if (s.includes('artificial') || s.includes('fake') || s.includes('ai') || s.includes('generated')) {
     return 'AI Generated';
   }
   if (s.includes('human') || s.includes('real') || s.includes('photo') || s.includes('natural')) {
     return 'Real Photograph';
   }
-  // Fallback: capitalise raw label
   return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 
-// ── Main handler ──────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed. Use POST.' });
+    return res.status(405).json({ error: 'Method not allowed.' });
   }
 
+  // ── Check API key ──
   const apiKey = process.env.HUGGINGFACE_API_KEY;
-  if (!apiKey || apiKey === 'your_huggingface_api_token_here') {
-    return res.status(500).json({
-      error: 'Hugging Face API key is not configured. Add HUGGINGFACE_API_KEY to .env.local.',
-    });
+  if (!apiKey || apiKey.trim() === '' || apiKey === 'your_huggingface_api_token_here') {
+    return res.status(500).json({ error: 'HUGGINGFACE_API_KEY is missing or not set in environment variables.' });
   }
 
-  // 1. Parse uploaded file ─────────────────────────────────────────────────
+  // ── Parse form ──
   let files;
   try {
     files = await parseForm(req);
   } catch (err) {
-    const msg = err.message?.includes('maxFileSize')
-      ? 'File is too large. Maximum allowed size is 10 MB.'
-      : 'Failed to parse uploaded file.';
-    return res.status(400).json({ error: msg });
+    return res.status(400).json({
+      error: err.message?.includes('maxFileSize')
+        ? 'File too large. Max 10MB.'
+        : 'Failed to parse file: ' + err.message,
+    });
   }
 
   const fileArray = files.image;
   const file = Array.isArray(fileArray) ? fileArray[0] : fileArray;
 
   if (!file) {
-    return res.status(400).json({ error: 'No image file received. Field name must be "image".' });
+    return res.status(400).json({ error: 'No image received. Make sure field name is "image".' });
   }
 
-  // 2. Validate MIME type ───────────────────────────────────────────────────
+  // ── Validate type ──
   const mimeType = file.mimetype || '';
   if (!ALLOWED_MIME.includes(mimeType)) {
-    return res.status(400).json({
-      error: `Unsupported file type "${mimeType}". Please upload a JPG, PNG, or WebP image.`,
-    });
+    return res.status(400).json({ error: `Invalid file type: ${mimeType}. Use JPG, PNG, or WebP.` });
   }
 
-  // 3. Read binary buffer ───────────────────────────────────────────────────
+  // ── Read file ──
   let imageBuffer;
   try {
     imageBuffer = fs.readFileSync(file.filepath);
-  } catch {
-    return res.status(500).json({ error: 'Failed to read uploaded file from disk.' });
+  } catch (err) {
+    return res.status(500).json({ error: 'Could not read file: ' + err.message });
   }
 
-  // 4. Call Hugging Face Inference API ─────────────────────────────────────
+  // ── Call HF API ──
   let hfResponse;
   try {
     hfResponse = await fetchWithTimeout(
@@ -128,48 +105,42 @@ export default async function handler(req, res) {
     );
   } catch (err) {
     if (err.name === 'AbortError') {
-      return res.status(504).json({ error: 'Request to AI model timed out. Please try again.' });
+      return res.status(504).json({ error: 'Request timed out after 30s. Try again.' });
     }
-    return res.status(502).json({ error: 'Failed to reach Hugging Face API. Check your network.' });
+    return res.status(502).json({ error: 'Network error calling HF API: ' + err.message });
   }
 
-  // 5. Parse HF response ───────────────────────────────────────────────────
+  // ── Read raw HF response body for debugging ──
+  const rawBody = await hfResponse.text();
+
   if (!hfResponse.ok) {
-    let body = {};
-    try { body = await hfResponse.json(); } catch {}
-    const msg =
-      hfResponse.status === 401
-        ? 'Invalid Hugging Face API key.'
-        : hfResponse.status === 503
-        ? 'AI model is loading. Please wait ~20 seconds and try again.'
-        : body.error || `Hugging Face API error (${hfResponse.status}).`;
-    return res.status(hfResponse.status === 503 ? 503 : 502).json({ error: msg });
+    // Return the EXACT error from HF so we can see what's wrong
+    return res.status(502).json({
+      error: `HF API error (${hfResponse.status}): ${rawBody}`,
+    });
   }
 
+  // ── Parse JSON ──
   let hfData;
   try {
-    hfData = await hfResponse.json();
+    hfData = JSON.parse(rawBody);
   } catch {
-    return res.status(502).json({ error: 'Could not parse response from AI model.' });
+    return res.status(502).json({ error: 'Could not parse HF response: ' + rawBody });
   }
 
-  // HF image-classification returns an array of { label, score }
-  // e.g. [{ label: 'artificial', score: 0.91 }, { label: 'human', score: 0.09 }]
   if (!Array.isArray(hfData) || hfData.length === 0) {
-    return res.status(502).json({ error: 'Unexpected response format from AI model.' });
+    return res.status(502).json({ error: 'Unexpected HF response format: ' + rawBody });
   }
 
-  // Sort descending by score
-  const sorted = [...hfData].sort((a, b) => b.score - a.score);
-  const top    = sorted[0];
-
-  const prediction  = normaliseLabel(top.label);
-  const confidence  = parseFloat(top.score.toFixed(4));
-  const details     = sorted.map((d) => ({
+  // ── Build result ──
+  const sorted     = [...hfData].sort((a, b) => b.score - a.score);
+  const top        = sorted[0];
+  const prediction = normaliseLabel(top.label);
+  const confidence = parseFloat(top.score.toFixed(4));
+  const details    = sorted.map((d) => ({
     label: normaliseLabel(d.label),
     score: parseFloat(d.score.toFixed(4)),
   }));
 
-  // 6. Return result ────────────────────────────────────────────────────────
   return res.status(200).json({ prediction, confidence, details });
 }
