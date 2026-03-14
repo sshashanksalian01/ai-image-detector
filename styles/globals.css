@@ -15,6 +15,10 @@
   --accent-danger:    #f43f5e;
   --accent-success:   #10b981;
   --accent-warn:      #f59e0b;
+  /* Tier confidence colors */
+  --tier-hi:  #10b981;
+  --tier-mid: #f59e0b;
+  --tier-lo:  #f43f5e;
 
   /* Glow colors */
   --glow-primary:   rgba(99, 102, 241, 0.25);
