@@ -21,7 +21,7 @@ export const config = { api: { bodyParser: false } };
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const HF_API_URL =
-  'https://api-inference.huggingface.co/models/Ateeqq/ai-vs-human-image-detector';
+  'https://api-inference.huggingface.co/models/umm-maybe/AI-image-detector';
 const MAX_BYTES    = 10 * 1024 * 1024;          // 10 MB
 const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp'];
 const TIMEOUT_MS   = 30_000;                    // 30 s
